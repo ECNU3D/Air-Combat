@@ -3,8 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>飞机大战 - 排行榜</title>
+    <title>飞机大战 - AI增强版</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
     <style>
         body {
             font-family: 'Inter', sans-serif;
@@ -115,6 +116,7 @@
             border-radius: 0.25rem;
             margin-bottom: 0.75rem;
             width: calc(100% - 1rem);
+            margin-top: 0.5rem; 
         }
         #leaderboardList {
             list-style-type: decimal;
@@ -134,7 +136,7 @@
 </head>
 <body>
     <div class="game-container">
-        <h1 class="text-2xl font-bold mb-2">飞机大战</h1> 
+        <h1 class="text-2xl font-bold mb-2">飞机大战 AI增强版 ✨</h1> 
         <div class="info-panel" id="infoPanel">
             <span id="scoreDisplay">得分: 0</span>
             <span id="levelDisplay" class="mx-2">关卡: 1</span> 
@@ -202,7 +204,7 @@
         const BOSS_HEALTH_BAR_HEIGHT = 18;
         const BOSS_HEALTH_BAR_WIDTH_RATIO = 0.55;
         const LEADERBOARD_MAX_ENTRIES = 10;
-        const LOCAL_STORAGE_KEY = 'planeGameHighScores';
+        const LOCAL_STORAGE_KEY = 'planeGameHighScores_v2_gemini'; 
 
 
         // --- 游戏状态变量 ---
@@ -215,13 +217,101 @@
         let enemiesDefeatedForIntervalDecrease = 0;
         
         let currentLevelIndex = 0;
-        let enemiesToDefeatForBoss = 0;
+        let enemiesToDefeatForBoss = 0; 
         let enemiesDefeatedThisLevel = 0;
         let bossActive = null;
+        let soundInitialized = false; 
+
+        // --- 音效 (Tone.js) ---
+        const sounds = {
+            playerShoot: null,
+            enemyShoot: null,
+            enemyHit: null,
+            playerHit: null,
+            powerUp: null,
+            bossAppear: null,
+            bossHit: null,
+            bossDefeat: null,
+            gameOver: null
+        };
+
+        function initializeSounds() {
+            if (!soundInitialized) return; 
+
+            sounds.playerShoot = new Tone.Synth({
+                oscillator: { type: "triangle" },
+                envelope: { attack: 0.005, decay: 0.1, sustain: 0.01, release: 0.08 },
+                volume: -15
+            }).toDestination();
+
+            sounds.enemyShoot = new Tone.Synth({
+                oscillator: { type: "sawtooth" },
+                envelope: { attack: 0.01, decay: 0.15, sustain: 0.02, release: 0.1 },
+                volume: -20
+            }).toDestination();
+            
+            sounds.enemyHit = new Tone.NoiseSynth({
+                noise: { type: "white" },
+                envelope: { attack: 0.005, decay: 0.05, sustain: 0, release: 0.05 },
+                volume: -12
+            }).toDestination();
+
+            sounds.playerHit = new Tone.Synth({
+                oscillator: { type: "square" },
+                envelope: { attack: 0.01, decay: 0.3, sustain: 0, release: 0.2 },
+                volume: -8
+            }).toDestination();
+            sounds.playerHit.triggerAttackRelease("C3", "8n", Tone.now()); 
+
+            sounds.powerUp = new Tone.Synth({
+                oscillator: { type: "sine" },
+                envelope: { attack: 0.01, decay: 0.2, sustain: 0.1, release: 0.1 },
+                volume: -10
+            }).toDestination();
+
+            sounds.bossAppear = new Tone.Synth({
+                oscillator: { type: "pulse", width: 0.6 },
+                envelope: { attack: 0.1, decay: 1.0, sustain: 0.5, release: 0.5 },
+                volume: -5
+            }).toDestination();
+            
+            sounds.bossHit = new Tone.MetalSynth({
+                frequency: 50,
+                envelope: { attack: 0.001, decay: 0.1, release: 0.01 },
+                harmonicity: 3.1,
+                modulationIndex: 16,
+                resonance: 2000,
+                octaves: 0.5,
+                volume: -15
+            }).toDestination();
+
+            sounds.bossDefeat = new Tone.NoiseSynth({
+                noise: { type: "pink" },
+                envelope: { attack: 0.1, decay: 1.5, sustain: 0, release: 0.5 },
+                volume: -3
+            }).toDestination();
+
+
+            sounds.gameOver = new Tone.Synth({
+                oscillator: { type: "sawtooth" },
+                envelope: { attack: 0.1, decay: 0.8, sustain: 0.2, release: 0.5 },
+                volume: -5
+            }).toDestination();
+        }
+        
+        async function startAudioContext() {
+            if (Tone.context.state !== 'running') {
+                await Tone.start();
+                console.log("Audio context started by user interaction.");
+            }
+            soundInitialized = true;
+            initializeSounds(); 
+        }
+
 
         // --- 关卡配置 ---
-        const levels = [ /* ... (与上一版本相同，包含5个关卡) ... */ 
-            { // Level 1
+        const levels = [ 
+            { 
                 levelNum: 1, enemiesToDefeat: 10, enemySpawnRateMultiplier: 1.0, 
                 boss: {
                     width: 90, height: 70, speed: 1.2, maxHealth: 150, points: 500, shootCooldown: 85, 
@@ -235,15 +325,16 @@
                     },
                     attackPattern: function(boss) { 
                         if (boss.currentShootCooldown <= 0) {
-                            shootEnemyBullet({x: boss.x + boss.width * 0.5, y: boss.y + boss.height * 0.4, width: 0, height: 0}); 
-                            shootEnemyBullet({x: boss.x + boss.width * 0.2, y: boss.y + boss.height * 0.6, width: 0, height: 0});
-                            shootEnemyBullet({x: boss.x + boss.width * 0.8, y: boss.y + boss.height * 0.6, width: 0, height: 0});
+                            const baseTime = Tone.now();
+                            shootEnemyBullet({x: boss.x + boss.width * 0.5, y: boss.y + boss.height * 0.4, width: 0, height: 0}, 0, ENEMY_BULLET_SPEED, 'lime', baseTime + 0.01); 
+                            shootEnemyBullet({x: boss.x + boss.width * 0.2, y: boss.y + boss.height * 0.6, width: 0, height: 0}, 0, ENEMY_BULLET_SPEED, 'lime', baseTime + 0.06);
+                            shootEnemyBullet({x: boss.x + boss.width * 0.8, y: boss.y + boss.height * 0.6, width: 0, height: 0}, 0, ENEMY_BULLET_SPEED, 'lime', baseTime + 0.11);
                             boss.currentShootCooldown = boss.shootCooldown;
                         } else boss.currentShootCooldown--;
                     }
                 }
             },
-            { // Level 2
+            { 
                 levelNum: 2, enemiesToDefeat: 20, enemySpawnRateMultiplier: 0.85, 
                 boss: {
                     width: 110, height: 90, speed: 1.0, maxHealth: 280, points: 1000, shootCooldown: 55, 
@@ -259,22 +350,23 @@
                         boss.phaseTimer++;
                         if (boss.phaseTimer > 180) { boss.phaseTimer = 0; boss.attackPhase = (boss.attackPhase + 1) % 3; }
                         if (boss.currentShootCooldown <= 0) {
+                            const baseTime = Tone.now();
                             if (boss.attackPhase === 0) { 
-                                for(let i=0; i < 3; i++) shootAngledEnemyBullet(boss, (i - 1) * 25, ENEMY_BULLET_SPEED * 0.95, 'orange'); 
+                                for(let i=0; i < 3; i++) shootAngledEnemyBullet(boss, (i - 1) * 25, ENEMY_BULLET_SPEED * 0.95, 'orange', baseTime + i * 0.05); 
                                 boss.currentShootCooldown = boss.shootCooldown * 1.1;
                             } else if (boss.attackPhase === 1) { 
-                                shootAngledEnemyBullet(boss, 0, ENEMY_BULLET_SPEED * 1.2, 'pink'); 
+                                shootAngledEnemyBullet(boss, 0, ENEMY_BULLET_SPEED * 1.2, 'pink', baseTime + 0.01); 
                                 boss.currentShootCooldown = boss.shootCooldown * 0.6;
                             } else { 
-                                shootEnemyBullet({x: boss.x, y: boss.y + boss.height/2, width:0, height:0}, -20, ENEMY_BULLET_SPEED * 1.1, 'purple');
-                                shootEnemyBullet({x: boss.x + boss.width, y: boss.y + boss.height/2, width:0, height:0}, 20, ENEMY_BULLET_SPEED * 1.1, 'purple');
+                                shootEnemyBullet({x: boss.x, y: boss.y + boss.height/2, width:0, height:0}, -20, ENEMY_BULLET_SPEED * 1.1, 'purple', baseTime + 0.01);
+                                shootEnemyBullet({x: boss.x + boss.width, y: boss.y + boss.height/2, width:0, height:0}, 20, ENEMY_BULLET_SPEED * 1.1, 'purple', baseTime + 0.06);
                                 boss.currentShootCooldown = boss.shootCooldown;
                             }
                         } else boss.currentShootCooldown--;
                     }
                 }
             },
-            { // Level 3
+            { 
                 levelNum: 3, enemiesToDefeat: 25, enemySpawnRateMultiplier: 0.75,
                 boss: {
                     width: 130, height: 100, speed: 1.3, maxHealth: 450, points: 1500, shootCooldown: 70,
@@ -295,13 +387,14 @@
                         boss.phaseTimer++;
                         if (boss.phaseTimer > 220) { boss.phaseTimer = 0; boss.attackPhase = (boss.attackPhase + 1) % 2; }
                         if (boss.currentShootCooldown <= 0) {
+                            const baseTime = Tone.now();
                             if (boss.attackPhase === 0) { 
-                                shootEnemyBullet({x: boss.x, y: boss.y + boss.height * 0.2, width:0, height:0}, -90, ENEMY_BULLET_SPEED, 'lightblue'); 
-                                shootEnemyBullet({x: boss.x + boss.width, y: boss.y + boss.height * 0.2, width:0, height:0}, 90, ENEMY_BULLET_SPEED, 'lightblue'); 
+                                shootEnemyBullet({x: boss.x, y: boss.y + boss.height * 0.2, width:0, height:0}, -90, ENEMY_BULLET_SPEED, 'lightblue', baseTime + 0.01); 
+                                shootEnemyBullet({x: boss.x + boss.width, y: boss.y + boss.height * 0.2, width:0, height:0}, 90, ENEMY_BULLET_SPEED, 'lightblue', baseTime + 0.06); 
                                 boss.currentShootCooldown = boss.shootCooldown * 0.8;
                             } else { 
                                 for(let i=0; i<4; i++) {
-                                    shootAngledEnemyBullet(boss, i * 90, ENEMY_BULLET_SPEED * 1.1, 'cyan');
+                                    shootAngledEnemyBullet(boss, i * 90, ENEMY_BULLET_SPEED * 1.1, 'cyan', baseTime + i * 0.05);
                                 }
                                 boss.currentShootCooldown = boss.shootCooldown * 1.3;
                             }
@@ -309,7 +402,7 @@
                     }
                 }
             },
-            { // Level 4
+            { 
                 levelNum: 4, enemiesToDefeat: 30, enemySpawnRateMultiplier: 0.65,
                 boss: {
                     width: 80, height: 120, speed: 1.8, maxHealth: 600, points: 2000, shootCooldown: 45,
@@ -334,12 +427,13 @@
                         
                         if (boss.attackPhase === 0) { 
                             if (boss.currentShootCooldown <= 0) {
-                                shootAngledEnemyBullet(boss, Math.random()*60-30, ENEMY_BULLET_SPEED * 1.3, 'silver');
+                                shootAngledEnemyBullet(boss, Math.random()*60-30, ENEMY_BULLET_SPEED * 1.3, 'silver'); // Uses default timing
                                 boss.currentShootCooldown = boss.shootCooldown * 0.4;
                             } else boss.currentShootCooldown--;
                         } else { 
                             if (boss.laserTimer < boss.laserDuration) {
                                 boss.laserTimer++;
+                                if (boss.laserTimer % 10 === 0 && sounds.enemyShoot) sounds.enemyShoot.triggerAttackRelease("E3", "32n", Tone.now()); 
                                 ctx.strokeStyle = 'rgba(255, 0, 0, 0.7)'; 
                                 ctx.lineWidth = 8;
                                 ctx.beginPath();
@@ -347,7 +441,10 @@
                                 ctx.lineTo(player.x + player.width/2, player.y + player.height/2); 
                                 ctx.stroke();
                                 if (Math.abs((player.x + player.width/2) - (boss.x + boss.width/2)) < player.width/2 + 4) { 
-                                     if (player.shieldActive) { player.shieldActive = false; player.shieldTimer = 0;} else { lives--; updateLives(); if (lives <= 0) endGame(); }
+                                     if (player.shieldActive) { player.shieldActive = false; player.shieldTimer = 0;} else { 
+                                         if(sounds.playerHit) sounds.playerHit.triggerAttackRelease("A2", "8n", Tone.now());
+                                         lives--; updateLives(); if (lives <= 0) endGame(`你的最终得分是: ${score}`, true); 
+                                    }
                                 }
                             } else {
                                  if (boss.currentShootCooldown <= 0) boss.currentShootCooldown = boss.shootCooldown * 2; 
@@ -357,7 +454,7 @@
                     }
                 }
             },
-            { // Level 5 - Final Boss
+            { 
                 levelNum: 5, enemiesToDefeat: 35, enemySpawnRateMultiplier: 0.55,
                 boss: {
                     width: 150, height: 120, speed: 0.8, maxHealth: 800, points: 3000, shootCooldown: 50,
@@ -378,21 +475,22 @@
                         if (boss.phaseTimer > 350) { boss.phaseTimer = 0; boss.attackPhase = (boss.attackPhase + 1) % 3; boss.subAttackTimer = 0; }
 
                         if (boss.currentShootCooldown <= 0) {
+                            const baseTime = Tone.now();
                             if (boss.attackPhase === 0) { 
                                 for(let i=0; i < 8; i++) {
-                                    shootAngledEnemyBullet(boss, i * 45, ENEMY_BULLET_SPEED * 1.1, 'magenta');
+                                    shootAngledEnemyBullet(boss, i * 45, ENEMY_BULLET_SPEED * 1.1, 'magenta', baseTime + i * 0.04);
                                 }
                                 boss.currentShootCooldown = boss.shootCooldown * 1.5;
                             } else if (boss.attackPhase === 1) { 
                                 boss.subAttackTimer++;
-                                if (boss.subAttackTimer % 30 === 0) {
+                                if (boss.subAttackTimer % 30 === 0) { // These are spaced out by game timer, default sound timing is fine
                                      shootEnemyBullet({x: 0, y: Math.random() * canvas.height/2, width:0, height:0}, 0, ENEMY_BULLET_SPEED * 1.5, 'grey'); 
                                      shootEnemyBullet({x: canvas.width, y: Math.random() * canvas.height/2, width:0, height:0}, 180, ENEMY_BULLET_SPEED * 1.5, 'grey'); 
                                 }
                                 boss.currentShootCooldown = boss.shootCooldown * 0.3; 
                             } else { 
-                                shootAngledEnemyBullet(boss, -5, ENEMY_BULLET_SPEED * 1.4, 'darkred');
-                                shootAngledEnemyBullet(boss, 5, ENEMY_BULLET_SPEED * 1.4, 'darkred');
+                                shootAngledEnemyBullet(boss, -5, ENEMY_BULLET_SPEED * 1.4, 'darkred', baseTime + 0.01);
+                                shootAngledEnemyBullet(boss, 5, ENEMY_BULLET_SPEED * 1.4, 'darkred', baseTime + 0.06);
                                 boss.currentShootCooldown = boss.shootCooldown * 1.2;
                             }
                         } else boss.currentShootCooldown--;
@@ -402,7 +500,7 @@
         ];
 
         // --- 道具绘制函数 ---
-        const powerUpDrawFunctions = { /* ... (与上一版本相同) ... */ 
+        const powerUpDrawFunctions = { 
             tripleShot: function(pCtx, px, py, pw, ph, isStatusDisplay = false) { 
                 pCtx.fillStyle = 'yellow';
                 const arrowHeight = ph * (isStatusDisplay ? 0.5 : 0.6);
@@ -483,7 +581,7 @@
         };
 
         // --- 玩家对象 ---
-        const player = { /* ... (与上一版本相同) ... */ 
+        const player = { 
             x: 0, y: 0,
             width: PLAYER_WIDTH, height: PLAYER_HEIGHT,
             speed: PLAYER_SPEED,
@@ -578,6 +676,7 @@
                 if (this.currentShootCooldown > 0) this.currentShootCooldown--;
                 
                 if ((keys[' '] || this.shooting) && this.currentShootCooldown <= 0) { 
+                    if(sounds.playerShoot) sounds.playerShoot.triggerAttackRelease("C5", "32n", Tone.now());
                     shootPlayerBullet(this); 
                     if (this.isSplit && this.wingman) {
                         shootPlayerBullet(this.wingman); 
@@ -599,6 +698,7 @@
                 }
             },
             activatePowerUp: function(type) {
+                if(sounds.powerUp) sounds.powerUp.triggerAttackRelease("E5", "8n", Tone.now());
                 if (type === 'tripleShot') {
                     this.bulletType = 'triple';
                     this.tripleShotTimer = POWERUP_DURATION; 
@@ -645,9 +745,16 @@
         const infoPanelElement = document.getElementById('infoPanel');
 
         // --- 事件监听 ---
-        window.addEventListener('keydown', (e) => keys[e.key] = true);
+        window.addEventListener('keydown', (e) => {
+            keys[e.key] = true;
+            if (!soundInitialized) startAudioContext(); 
+        });
         window.addEventListener('keyup', (e) => keys[e.key] = false);
-        startButton.addEventListener('click', startGame);
+        
+        startButton.addEventListener('click', () => {
+            if (!soundInitialized) startAudioContext();
+            startGame();
+        });
         viewLeaderboardButtonMain.addEventListener('click', displayLeaderboard);
         closeLeaderboardButton.addEventListener('click', () => leaderboardModal.style.display = 'none');
         
@@ -657,15 +764,19 @@
         const touchRight = document.getElementById('touchRight');
         const touchShoot = document.getElementById('touchShoot');
 
-        function isTouchDevice() { /* ... */ 
+        function isTouchDevice() { 
              try { return (('ontouchstart' in window) || (navigator.maxTouchPoints > 0) || (navigator.msMaxTouchPoints > 0)); } catch (e) { return false; }
         }
-        function setupTouchControls() { /* ... */ 
+        function setupTouchControls() { 
             if (isTouchDevice()) {
                 touchControlsContainer.style.display = 'grid';
                 const handleTouch = (element, actionStart, actionEnd) => {
                     if (!element) return;
-                    element.addEventListener('touchstart', (e) => { e.preventDefault(); actionStart(); }, { passive: false });
+                    element.addEventListener('touchstart', (e) => { 
+                        e.preventDefault(); 
+                        if (!soundInitialized) startAudioContext(); 
+                        actionStart(); 
+                    }, { passive: false });
                     element.addEventListener('touchend', (e) => { e.preventDefault(); actionEnd(); }, { passive: false });
                 };
                 handleTouch(touchUp, () => player.dy = -PLAYER_SPEED, () => player.dy = 0);
@@ -678,6 +789,40 @@
             }
         }
 
+        // --- Gemini API Helper ---
+        async function geminiGenerateText(prompt) {
+            const apiKey = ""; 
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+            
+            let chatHistory = [{ role: "user", parts: [{ text: prompt }] }];
+            const payload = { contents: chatHistory };
+
+            try {
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if (!response.ok) {
+                    console.error("Gemini API request failed:", response.status, await response.text());
+                    return null; 
+                }
+                const result = await response.json();
+                if (result.candidates && result.candidates.length > 0 &&
+                    result.candidates[0].content && result.candidates[0].content.parts &&
+                    result.candidates[0].content.parts.length > 0) {
+                    return result.candidates[0].content.parts[0].text.trim();
+                } else {
+                    console.warn("Gemini API response format unexpected or empty:", result);
+                    return null;
+                }
+            } catch (error) {
+                console.error("Error calling Gemini API:", error);
+                return null;
+            }
+        }
+
+
         // --- 核心游戏函数 ---
         function updateScore() { scoreDisplay.textContent = `得分: ${score}`; }
         function updateLives() { livesDisplay.textContent = `生命: ${lives}`; }
@@ -685,36 +830,57 @@
 
         function showMessage(title, mainText, showNameInput = false) {
             messageTitle.textContent = title;
-            messageContent.innerHTML = `<p id="messageText">${mainText}</p>`; 
+            messageContent.innerHTML = ''; 
             messageActions.innerHTML = ''; 
 
             if (showNameInput && score > 0) { 
+                const textElement = document.createElement('p');
+                textElement.id = 'messageText';
+                textElement.innerHTML = `✨ 正在生成个性化游戏总结... (你的得分: ${score})`;
+                messageContent.appendChild(textElement);
+
                 const nameInput = document.createElement('input');
                 nameInput.type = 'text';
                 nameInput.id = 'playerNameInput';
                 nameInput.placeholder = '输入你的名字 (最多10个字符)';
                 nameInput.maxLength = 10;
-                messageContent.appendChild(nameInput);
+                messageContent.appendChild(nameInput); 
 
                 const submitButton = document.createElement('button');
                 submitButton.id = 'submitScoreButton';
                 submitButton.textContent = '提交分数';
                 submitButton.onclick = handleSubmitScore;
-                messageActions.appendChild(submitButton);
-            } else {
+                messageActions.appendChild(submitButton); 
+
+                geminiGenerateText(`玩家在飞机大战游戏中得分 ${score}，在第 ${currentLevelIndex + 1} 关被击败。请为他们写【一条】简短、幽默或鼓励性的中文游戏结束语 (最多2句话)，直接给出这条结束语，不要包含其他说明文字。`)
+                    .then(geminiMsg => {
+                        if (geminiMsg && geminiMsg.length > 0 && !geminiMsg.toLowerCase().includes("好的") && !geminiMsg.toLowerCase().includes("选择")) { 
+                            textElement.innerHTML = "✨ " + geminiMsg + ` (得分: ${score})`;
+                        } else {
+                            textElement.innerHTML = `你的最终得分是: ${score}. (未能获取个性化提示)`;
+                        }
+                    }).catch(() => {
+                        textElement.innerHTML = `你的最终得分是: ${score}. (获取提示时发生错误)`;
+                    });
+
+            } else { 
+                messageContent.innerHTML = `<p id="messageText">${mainText}</p>`;
                 const restartButton = document.createElement('button');
                 restartButton.textContent = '重新开始';
                 restartButton.onclick = () => { hideMessage(); startGame(); };
                 messageActions.appendChild(restartButton);
 
-                const viewBoardButton = document.createElement('button');
-                viewBoardButton.textContent = '查看排行榜';
-                viewBoardButton.className = 'ml-2';
-                viewBoardButton.onclick = () => { hideMessage(); displayLeaderboard(); };
-                messageActions.appendChild(viewBoardButton);
+                if (!mainText.includes("恭喜")) { 
+                    const viewBoardButton = document.createElement('button');
+                    viewBoardButton.textContent = '查看排行榜';
+                    viewBoardButton.className = 'ml-2';
+                    viewBoardButton.onclick = () => { hideMessage(); displayLeaderboard(); };
+                    messageActions.appendChild(viewBoardButton);
+                }
             }
             messageBox.style.display = 'block';
         }
+
 
         function hideMessage() { messageBox.style.display = 'none'; }
 
@@ -726,7 +892,13 @@
             }
             saveScore(playerName, score);
             
-            messageContent.innerHTML = `<p>分数已保存!</p><p>你的最终得分是: ${score}</p>`;
+            const textElement = document.getElementById('messageText');
+            if(textElement && !textElement.textContent.startsWith("✨")) {
+                 textElement.innerHTML = `<p>分数已保存!</p><p>你的最终得分是: ${score}</p>`;
+            } else if (textElement) {
+                 textElement.innerHTML = `<p>分数已保存!</p><p>${textElement.innerHTML}</p>`;
+            }
+            
             messageActions.innerHTML = ''; 
 
             const restartButton = document.createElement('button');
@@ -744,13 +916,13 @@
         }
 
 
-        function setupLevel(levelIdx) { /* ... (与上一版本相同) ... */ 
+        function setupLevel(levelIdx) { 
             if (levelIdx >= levels.length) { 
                 endGame("恭喜你！已通关所有关卡！", false); 
                 return;
             }
             const levelData = levels[levelIdx];
-            enemiesToDefeatForBoss = levelData.enemiesToDefeat;
+            enemiesToDefeatForBoss = levelData.enemiesToDefeat; 
             if (levelData.boss) { 
                 levelData.boss.moveRange = canvas.width * (levelData.boss.moveRangeRatio || 0.2);
             }
@@ -760,7 +932,7 @@
             updateLevelDisplay();
         }
 
-        function resetGame() { /* ... (与上一版本相同) ... */ 
+        function resetGame() { 
             score = 0; lives = 3;
             playerBullets = []; enemyBullets = []; enemies = []; powerUps = [];
             gameOver = false; gameRunning = true;
@@ -788,7 +960,7 @@
             startButton.style.display = 'none';
         }
 
-        function startGame() { /* ... (与上一版本相同) ... */ 
+        function startGame() { 
             if (!gameRunning) { 
                 resetGame();
                 if (animationFrameId) cancelAnimationFrame(animationFrameId);
@@ -798,6 +970,7 @@
         }
 
         function endGame(message = `你的最终得分是: ${score}`, promptForName = true) {
+            if(sounds.gameOver) sounds.gameOver.triggerAttackRelease("G2", "1n", Tone.now());
             gameOver = true; gameRunning = false;
             if (animationFrameId) cancelAnimationFrame(animationFrameId); animationFrameId = null;
             if (enemySpawnTimeoutId) clearTimeout(enemySpawnTimeoutId); enemySpawnTimeoutId = null;
@@ -837,9 +1010,9 @@
             if (highScores.length === 0) {
                 leaderboardList.innerHTML = '<li>还没有记录哦！</li>';
             } else {
-                highScores.forEach((scoreItem) => { // 移除 index 参数
+                highScores.forEach((scoreItem) => { 
                     const li = document.createElement('li');
-                    li.textContent = `${scoreItem.name} - ${scoreItem.score}`; // 移除手动添加的编号
+                    li.textContent = `${scoreItem.name} - ${scoreItem.score}`; 
                     leaderboardList.appendChild(li);
                 });
             }
@@ -847,7 +1020,7 @@
         }
 
 
-        function createBullet(x, y, angle = 0, speed = BULLET_SPEED, color = 'yellow', owner = 'player') { /* ... */ 
+        function createBullet(x, y, angle = 0, speed = BULLET_SPEED, color = 'yellow', owner = 'player') { 
             const speedX = Math.sin(angle * Math.PI / 180) * speed;
             const speedY = (owner === 'player' ? -1 : 1) * Math.cos(angle * Math.PI / 180) * speed; 
             return {
@@ -860,7 +1033,7 @@
             };
         }
         
-        function shootPlayerBullet(shooter) { /* ... */ 
+        function shootPlayerBullet(shooter) { 
             const centerX = shooter.x + shooter.width / 2 - BULLET_WIDTH / 2;
             const frontY = shooter.y;
 
@@ -873,12 +1046,21 @@
             }
         }
 
-        function shootEnemyBullet(sourceObject, angle = 0, speed = ENEMY_BULLET_SPEED, color = 'lime') { /* ... */ 
+        function shootEnemyBullet(sourceObject, angle = 0, speed = ENEMY_BULLET_SPEED, color = 'lime', explicitScheduledTime = null) { 
+            if(sounds.enemyShoot) {
+                const playTime = explicitScheduledTime !== null ? explicitScheduledTime : Tone.now() + 0.01;
+                sounds.enemyShoot.triggerAttackRelease("A#3", "24n", playTime);
+            }
             const bulletX = sourceObject.x + sourceObject.width / 2 - ENEMY_BULLET_WIDTH / 2;
             const bulletY = sourceObject.y + sourceObject.height; 
             enemyBullets.push(createBullet(bulletX, bulletY, angle, speed, color, 'enemy'));
         }
-         function shootAngledEnemyBullet(sourceObject, angleOffset = 0, speed = ENEMY_BULLET_SPEED, color = 'orange') { /* ... */ 
+
+         function shootAngledEnemyBullet(sourceObject, angleOffset = 0, speed = ENEMY_BULLET_SPEED, color = 'orange', explicitScheduledTime = null) { 
+            if(sounds.enemyShoot) {
+                const playTime = explicitScheduledTime !== null ? explicitScheduledTime : Tone.now() + 0.01;
+                sounds.enemyShoot.triggerAttackRelease("B3", "24n", playTime);
+            }
             const bulletX = sourceObject.x + sourceObject.width / 2 - ENEMY_BULLET_WIDTH / 2;
             const bulletY = sourceObject.y + sourceObject.height / 2; 
             const dx = (player.x + player.width/2) - (sourceObject.x + sourceObject.width/2);
@@ -890,7 +1072,7 @@
         }
         
         let enemySpawnTimeoutId;
-        function spawnEnemies() { /* ... (与上一版本相同) ... */ 
+        function spawnEnemies() { 
             if (gameOver || !gameRunning || bossActive) return; 
 
             const enemyTypeRoll = Math.random();
@@ -927,17 +1109,17 @@
             }
 
             const x = Math.random() * (canvas.width - enemyData.width);
-            const speed = (Math.random() * (ENEMY_SPEED_MAX - ENEMY_SPEED_MIN) + ENEMY_SPEED_MIN) * (1 + currentLevelIndex * 0.15); 
+            const speedVal = (Math.random() * (ENEMY_SPEED_MAX - ENEMY_SPEED_MIN) + ENEMY_SPEED_MIN) * (1 + currentLevelIndex * 0.15); 
             
             enemies.push({
                 x: x, y: -enemyData.height, 
                 width: enemyData.width, height: enemyData.height, 
-                speed: speed, points: enemyData.points,
+                speed: speedVal, points: enemyData.points,
                 draw: function() { enemyData.drawFunc(ctx, this.x, this.y, this.width, this.height); },
                 update: function() {
                     this.y += this.speed;
                     if (Math.random() < ENEMY_SHOOT_CHANCE * (1 + currentLevelIndex * 0.08) && this.y > 0 && this.y < canvas.height * 0.75) { 
-                        shootEnemyBullet(this);
+                        shootEnemyBullet(this); // Will use default timing for sound
                     }
                 }
             });
@@ -951,8 +1133,9 @@
             enemySpawnTimeoutId = setTimeout(spawnEnemies, dynamicSpawnInterval);
         }
 
-        function spawnBoss() { /* ... (与上一版本相同) ... */ 
+        function spawnBoss() { 
             if (bossActive || currentLevelIndex >= levels.length) return;
+            if(sounds.bossAppear) sounds.bossAppear.triggerAttackRelease("C3", "1s", Tone.now());
 
             const bossData = levels[currentLevelIndex].boss;
             bossActive = {
@@ -975,7 +1158,10 @@
                 isEntering: true,
                 moveDirection: bossData.moveDirection || 1,
                 baseX: canvas.width / 2 - bossData.width / 2, 
-                moveRange: canvas.width * (bossData.moveRangeRatio || 0.2), 
+                moveRange: canvas.width * (bossData.moveRangeRatio || 0.2),
+                speechText: null, 
+                speechTimer: 0,   
+                isDefeated: false, 
                 update: function() {
                     if (this.isEntering) {
                         this.y += this.speed * 2.5; 
@@ -984,7 +1170,7 @@
                             this.isEntering = false;
                             this.baseX = this.x; 
                         }
-                    } else {
+                    } else if (!this.isDefeated) { 
                         this.x += this.speed * this.moveDirection;
                         if (this.x > this.baseX + this.moveRange || this.x < this.baseX - this.moveRange) {
                             this.moveDirection *= -1; 
@@ -992,7 +1178,7 @@
                         }
                         this.x = Math.max(0, Math.min(this.x, canvas.width - this.width));
                     }
-                    if (this.attackPattern && !this.isEntering) {
+                    if (this.attackPattern && !this.isEntering && !this.isDefeated) {
                         this.attackPattern(this);
                     }
                 },
@@ -1000,11 +1186,33 @@
                     this.drawFunc(ctx, this.x, this.y, this.width, this.height);
                 }
             };
+
+            bossActive.speechText = "✨ 首领通讯接入...";
+            bossActive.speechTimer = 180; 
+            geminiGenerateText(`一个强大的敌方首领 (飞机大战游戏 关卡 ${currentLevelIndex+1}) 刚刚出现。请为首领写一句简短的、有威慑力的中文嘲讽语（最多15个汉字），直接给出这条嘲讽语，不要包含其他说明文字。`)
+                .then(taunt => {
+                    if (bossActive && !bossActive.isDefeated) { 
+                        if (taunt && taunt.length > 0 && !taunt.toLowerCase().includes("好的") && !taunt.toLowerCase().includes("选择")) {
+                            bossActive.speechText = "🗣️ " + taunt;
+                            bossActive.speechTimer = 240; 
+                        } else {
+                            bossActive.speechText = "🗣️ 你死定了！"; 
+                            bossActive.speechTimer = 120;
+                        }
+                    }
+                }).catch(() => {
+                     if (bossActive && !bossActive.isDefeated) {
+                        bossActive.speechText = "🗣️ 准备受死吧！"; 
+                        bossActive.speechTimer = 120;
+                    }
+                });
+
+
             if (enemySpawnTimeoutId) clearTimeout(enemySpawnTimeoutId); 
         }
 
 
-        function spawnPowerUp(x, y) { /* ... (与上一版本相同) ... */ 
+        function spawnPowerUp(x, y) { 
             const typeRoll = Math.random();
             let powerUpData;
             if (typeRoll < 0.25) { 
@@ -1024,17 +1232,17 @@
             });
         }
 
-        function checkCollision(rect1, rect2) { /* ... */ 
+        function checkCollision(rect1, rect2) { 
             return rect1.x < rect2.x + rect2.width && rect1.x + rect1.width > rect2.x &&
                    rect1.y < rect2.y + rect2.height && rect1.y + rect1.height > rect2.y;
         }
 
-        function handleCollisions() { /* ... (与上一版本相同) ... */ 
-            // 玩家子弹 vs 敌人/Boss
+        function handleCollisions() { 
             for (let i = playerBullets.length - 1; i >= 0; i--) {
                 const bullet = playerBullets[i];
                 for (let j = enemies.length - 1; j >= 0; j--) {
                     if (checkCollision(bullet, enemies[j])) {
+                        if(sounds.enemyHit) sounds.enemyHit.triggerAttackRelease("16n", Tone.now());
                         score += enemies[j].points; enemiesDefeatedThisLevel++; enemiesDefeatedForIntervalDecrease++; updateScore();
                         if (Math.random() < POWERUP_DROP_CHANCE) spawnPowerUp(enemies[j].x + enemies[j].width / 2, enemies[j].y + enemies[j].height / 2);
                         enemies.splice(j, 1); playerBullets.splice(i, 1); break; 
@@ -1042,21 +1250,39 @@
                 }
                 if (!playerBullets[i]) continue; 
 
-                if (bossActive && checkCollision(bullet, bossActive)) {
+                if (bossActive && !bossActive.isDefeated && checkCollision(bullet, bossActive)) { 
+                    if(sounds.bossHit) sounds.bossHit.triggerAttackRelease(Tone.now());
                     bossActive.health--; playerBullets.splice(i, 1); 
                     if (Math.random() < BOSS_POWERUP_DROP_CHANCE_ON_HIT) { 
                         spawnPowerUp(bossActive.x + Math.random() * bossActive.width, bossActive.y + bossActive.height);
                     }
                     if (bossActive.health <= 0) {
-                        score += bossActive.points; updateScore(); bossActive = null; currentLevelIndex++;
-                        if (currentLevelIndex >= levels.length) endGame("恭喜你！已通关所有关卡！", false); // 通关不提示输名字
-                        else { setupLevel(currentLevelIndex); spawnEnemies(); }
+                        if(sounds.bossDefeat) sounds.bossDefeat.triggerAttackRelease("2s", Tone.now());
+                        bossActive.isDefeated = true;
+                        bossActive.speechText = "✨ 生成遗言中..."; 
+                        bossActive.speechTimer = 240; 
+
+                        geminiGenerateText(`飞机大战游戏中的一个敌方首领 (关卡 ${currentLevelIndex+1}) 刚刚被击败。请为首领写一句简短的、戏剧性的中文'遗言'或爆炸描述（最多15个汉字），直接给出这条遗言，不要包含其他说明文字。`)
+                            .then(defeatSpeech => {
+                                if (bossActive && bossActive.isDefeated) { 
+                                    if (defeatSpeech && defeatSpeech.length > 0 && !defeatSpeech.toLowerCase().includes("好的") && !defeatSpeech.toLowerCase().includes("选择")) {
+                                        bossActive.speechText = "💀 " + defeatSpeech;
+                                    } else {
+                                        bossActive.speechText = "💀 呜啊啊啊！"; 
+                                    }
+                                    bossActive.speechTimer = 150; 
+                                }
+                            }).catch(() => {
+                                if (bossActive && bossActive.isDefeated) {
+                                    bossActive.speechText = "💀 我还会回来的！"; 
+                                    bossActive.speechTimer = 120;
+                                }
+                            });
                     }
                     break; 
                 }
             }
 
-            // 敌方子弹 vs 玩家 (包括僚机)
             for (let i = enemyBullets.length - 1; i >= 0; i--) {
                 const bullet = enemyBullets[i];
                 let playerHit = false;
@@ -1067,6 +1293,7 @@
                         player.shieldActive = false; player.shieldTimer = 0;
                         enemyBullets.splice(i, 1); continue; 
                     } else { 
+                        if(sounds.playerHit) sounds.playerHit.triggerAttackRelease("G#2", "8n", Tone.now()); 
                         player.isSplit = false; player.wingman = null;
                         enemyBullets.splice(i, 1); continue; 
                     }
@@ -1077,16 +1304,16 @@
                     if (player.shieldActive) {
                         player.shieldActive = false; player.shieldTimer = 0;
                     } else {
+                        if(sounds.playerHit) sounds.playerHit.triggerAttackRelease("A2", "8n", Tone.now());
                         lives--; updateLives();
-                        if (lives <= 0) { endGame(`你的最终得分是: ${score}`, true); return; } // 死亡提示输名字
+                        if (lives <= 0) { endGame(`你的最终得分是: ${score}`, true); return; } 
                     }
                     break; 
                 }
             }
 
-            // 敌人/Boss vs 玩家 (包括僚机)
             const allHostiles = [...enemies]; 
-            if (bossActive) allHostiles.push(bossActive); 
+            if (bossActive && !bossActive.isDefeated) allHostiles.push(bossActive); 
 
             for (let i = allHostiles.length - 1; i >= 0; i--) {
                 const hostile = allHostiles[i];
@@ -1096,13 +1323,15 @@
                      if (player.shieldActive) {
                         player.shieldActive = false; player.shieldTimer = 0;
                         if (hostile !== bossActive) {
+                            if(sounds.enemyHit) sounds.enemyHit.triggerAttackRelease("16n", Tone.now());
                             score += Math.floor(hostile.points / 2); updateScore();
                             enemies.splice(enemies.indexOf(hostile), 1);
-                        } else {
+                        } else if (bossActive) { 
+                            if(sounds.bossHit) sounds.bossHit.triggerAttackRelease(Tone.now());
                             bossActive.health -= 10; 
-                            if(bossActive.health <= 0) { score += bossActive.points; updateScore(); bossActive = null; currentLevelIndex++; if (currentLevelIndex >= levels.length) endGame("恭喜通关！", false); else { setupLevel(currentLevelIndex); spawnEnemies(); }}
                         }
                     } else {
+                        if(sounds.playerHit) sounds.playerHit.triggerAttackRelease("G#2", "8n", Tone.now()); 
                         player.isSplit = false; player.wingman = null;
                         if (hostile !== bossActive) enemies.splice(enemies.indexOf(hostile), 1); 
                     }
@@ -1116,14 +1345,16 @@
                 if (playerCollided) {
                     if (player.shieldActive) {
                         player.shieldActive = false; player.shieldTimer = 0;
-                        if (hostile === bossActive) {
+                        if (hostile === bossActive && bossActive) { 
+                            if(sounds.bossHit) sounds.bossHit.triggerAttackRelease(Tone.now());
                             bossActive.health -= 20; 
-                             if (bossActive.health <= 0) { score += bossActive.points; updateScore(); bossActive = null; currentLevelIndex++; if (currentLevelIndex >= levels.length) endGame("恭喜通关！", false); else { setupLevel(currentLevelIndex); spawnEnemies(); }}
                         } else {
+                             if(sounds.enemyHit) sounds.enemyHit.triggerAttackRelease("16n", Tone.now());
                              score += Math.floor(hostile.points / 2); updateScore();
                              enemies.splice(enemies.indexOf(hostile), 1); 
                         }
                     } else {
+                        if(sounds.playerHit) sounds.playerHit.triggerAttackRelease("A2", "8n", Tone.now());
                         lives--; updateLives();
                         if (hostile !== bossActive) enemies.splice(enemies.indexOf(hostile), 1);
                         if (lives <= 0) { endGame(`你的最终得分是: ${score}`, true); return; }
@@ -1132,17 +1363,16 @@
                 }
             }
             
-            // 玩家 vs 道具
             for (let i = powerUps.length - 1; i >= 0; i--) {
                 if (checkCollision(powerUps[i], player)) {
-                    player.activatePowerUp(powerUps[i].type);
+                    player.activatePowerUp(powerUps[i].type); 
                     powerUps.splice(i, 1);
                     break;
                 }
             }
         }
         
-        function drawPowerUpStatus() { /* ... (与上一版本相同) ... */ 
+        function drawPowerUpStatus() { 
             let displayY = POWERUP_DISPLAY_PADDING; 
             const displayX = POWERUP_DISPLAY_PADDING; 
             const barHeight = 8; 
@@ -1189,8 +1419,8 @@
             }
         }
 
-        function drawBossHealthBar() { /* ... (与上一版本相同) ... */ 
-            if (bossActive && bossActive.health > 0) {
+        function drawBossHealthBar() { 
+            if (bossActive && bossActive.health > 0 && !bossActive.isDefeated) { 
                 const barWidth = canvas.width * BOSS_HEALTH_BAR_WIDTH_RATIO;
                 const barX = canvas.width / 2 - barWidth / 2;
                 const barY = 15; 
@@ -1207,6 +1437,26 @@
                 ctx.textAlign = "center";
                 ctx.fillText(`BOSS HP: ${bossActive.health}/${bossActive.maxHealth}`, canvas.width / 2, barY + BOSS_HEALTH_BAR_HEIGHT - 5);
             }
+        }
+
+        function drawBossSpeech(text, bossX, bossY, bossWidth) {
+            ctx.fillStyle = "white";
+            ctx.font = "bold 16px 'Microsoft YaHei', Arial, sans-serif"; 
+            ctx.textAlign = "center";
+            const speechY = bossY - 15; 
+            const textWidth = ctx.measureText(text).width;
+            let speechX = bossX + bossWidth / 2;
+
+            if (speechX - textWidth / 2 < 10) speechX = textWidth / 2 + 10;
+            if (speechX + textWidth / 2 > canvas.width - 10) speechX = canvas.width - textWidth / 2 - 10;
+            
+            ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+            ctx.beginPath();
+            ctx.roundRect(speechX - textWidth/2 - 10, speechY - 20, textWidth + 20, 25, 5);
+            ctx.fill();
+
+            ctx.fillStyle = "white";
+            ctx.fillText(text, speechX, speechY);
         }
         
         function gameLoop() {
@@ -1243,11 +1493,39 @@
 
             drawPowerUpStatus(); 
             drawBossHealthBar(); 
+
+            if (bossActive) {
+                if (bossActive.speechText && bossActive.speechTimer > 0) {
+                    drawBossSpeech(bossActive.speechText, bossActive.x, bossActive.y, bossActive.width);
+                    bossActive.speechTimer--;
+                } else if (bossActive.speechText && bossActive.speechTimer <= 0) { 
+                    bossActive.speechText = null;
+                }
+
+                if (bossActive.isDefeated && (!bossActive.speechText || bossActive.speechTimer <= 0)) {
+                    score += bossActive.points; 
+                    updateScore();
+                    
+                    const nextLevelIndex = currentLevelIndex + 1;
+                    const allLevelsCompleted = nextLevelIndex >= levels.length;
+                    
+                    bossActive = null; 
+                    currentLevelIndex = nextLevelIndex -1; 
+
+                    if (allLevelsCompleted) {
+                        endGame("恭喜你！已通关所有关卡！", false);
+                    } else {
+                        currentLevelIndex++; 
+                        setupLevel(currentLevelIndex);
+                        spawnEnemies();
+                    }
+                }
+            }
             
             animationFrameId = requestAnimationFrame(gameLoop);
         }
 
-        function resizeCanvas() { /* ... (与上一版本相同) ... */ 
+        function resizeCanvas() { 
             const gameContainer = document.querySelector('.game-container');
             const aspectRatio = 4 / 3; 
             
